@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Asset Browser</title>
+<style>
+  :root {
+    --bg: #f4f4f6; --panel: #ffffff; --text: #1d1d22; --muted: #6b6b76;
+    --border: #dcdce2; --accent: #3b6fe0; --accent-text: #ffffff;
+    --check-a: #e6e6ea; --check-b: #f8f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --panel: #212127; --text: #e8e8ec; --muted: #9a9aa6;
+      --border: #34343c; --accent: #5b8bf5; --accent-text: #ffffff;
+      --check-a: #2a2a31; --check-b: #33333b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  header { position: sticky; top: 0; z-index: 10; background: var(--panel);
+           border-bottom: 1px solid var(--border); padding: 12px 16px;
+           display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  #search { flex: 1 1 260px; min-width: 0; padding: 8px 12px; font-size: 14px;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg); color: var(--text); }
+  .filters { display: flex; gap: 4px; }
+  .filters button { padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px;
+                    background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px; }
+  .filters button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  label.opt { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
+  #count { color: var(--muted); font-size: 13px; margin-left: auto; white-space: nowrap; }
+
+  main { padding: 16px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+          overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .thumb { height: 150px; display: flex; align-items: center; justify-content: center;
+           background-color: var(--check-b);
+           background-image: linear-gradient(45deg, var(--check-a) 25%, transparent 25%),
+                             linear-gradient(-45deg, var(--check-a) 25%, transparent 25%),
+                             linear-gradient(45deg, transparent 75%, var(--check-a) 75%),
+                             linear-gradient(-45deg, transparent 75%, var(--check-a) 75%);
+           background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+  .thumb img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; padding: 6px; }
+  body.pixelated .thumb img, body.pixelated #lightbox img { image-rendering: pixelated; }
+  .thumb.audio { background: var(--bg); flex-direction: column; gap: 10px; padding: 8px; }
+  .thumb.audio .icon { font-size: 36px; opacity: .6; }
+  .thumb.audio audio { width: 100%; }
+  .thumb.other { background: var(--bg); color: var(--muted); font-size: 22px; font-weight: 600; }
+  .info { padding: 8px 10px; min-width: 0; }
+  .name, .folder, .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .name { font-weight: 600; }
+  .folder, .meta { color: var(--muted); font-size: 12px; }
+
+  #sentinel { height: 1px; }
+  #empty, #loader { text-align: center; color: var(--muted); padding: 60px 16px; }
+  #loader input { margin-top: 12px; }
+
+  #lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.88);
+              display: none; flex-direction: column; }
+  #lightbox.open { display: flex; }
+  #lightbox .stage { flex: 1; overflow: auto; display: flex; padding: 16px; }
+  #lightbox img { margin: auto; max-width: none; background-color: #fff;
+                  background-image: linear-gradient(45deg, #ddd 25%, transparent 25%),
+                                    linear-gradient(-45deg, #ddd 25%, transparent 25%),
+                                    linear-gradient(45deg, transparent 75%, #ddd 75%),
+                                    linear-gradient(-45deg, transparent 75%, #ddd 75%);
+                  background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+  #lightbox .caption { color: #ddd; padding: 10px 16px; font-size: 13px; word-break: break-all; }
+  #lightbox .close { position: absolute; top: 10px; right: 14px; background: none; border: none;
+                     color: #fff; font-size: 32px; line-height: 1; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Asset Browser</h1>
+  <input id="search" type="search" placeholder="Search filename or folder…" autocomplete="off">
+  <div class="filters">
+    <button data-kind="all" class="active">All</button>
+    <button data-kind="image">Images</button>
+    <button data-kind="audio">Audio</button>
+  </div>
+  <label class="opt"><input type="checkbox" id="pixelated"> Pixel art scaling</label>
+  <span id="count"></span>
+</header>
+
+<main>
+  <div id="loader" hidden>
+    <p>No data found. Run <code>export_json.py</code> so <code>assets_data.js</code> sits next to this file,<br>
+       or load <code>assets.json</code> manually:</p>
+    <input type="file" id="jsonFile" accept=".json,application/json">
+  </div>
+  <div id="grid"></div>
+  <div id="empty" hidden>No assets match.</div>
+  <div id="sentinel"></div>
+</main>
+
+<div id="lightbox">
+  <button class="close" title="Close (Esc)">&times;</button>
+  <div class="stage"><img alt=""></div>
+  <div class="caption"></div>
+</div>
+
+<script src="assets_data.js"></script>
+<script>
+(function () {
+  const PAGE = 200;
+  const grid = document.getElementById('grid');
+  const sentinel = document.getElementById('sentinel');
+  const countEl = document.getElementById('count');
+  const emptyEl = document.getElementById('empty');
+  const searchEl = document.getElementById('search');
+  const lightbox = document.getElementById('lightbox');
+  const lbImg = lightbox.querySelector('img');
+  const lbCaption = lightbox.querySelector('.caption');
+
+  let assets = [];
+  let filtered = [];
+  let rendered = 0;
+  let kindFilter = 'all';
+
+  function setData(data) {
+    assets = data.map(a => Object.assign(a, {
+      _search: (a.filename + ' ' + a.folder + ' ' + (a.pack || '')).toLowerCase()
+    }));
+    document.getElementById('loader').hidden = true;
+    applyFilters();
+  }
+
+  function applyFilters() {
+    const terms = searchEl.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    filtered = assets.filter(a =>
+      (kindFilter === 'all' || a.kind === kindFilter) &&
+      terms.every(t => a._search.includes(t)));
+    grid.replaceChildren();
+    rendered = 0;
+    renderMore();
+    countEl.textContent = filtered.length.toLocaleString() + ' of ' + assets.length.toLocaleString();
+    emptyEl.hidden = filtered.length > 0 || assets.length === 0;
+  }
+
+  function renderMore() {
+    const frag = document.createDocumentFragment();
+    const end = Math.min(rendered + PAGE, filtered.length);
+    for (let i = rendered; i < end; i++) frag.appendChild(makeCard(filtered[i], i));
+    grid.appendChild(frag);
+    rendered = end;
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function formatSize(kb) {
+    return kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb.toFixed(1) + ' KB';
+  }
+
+  function makeCard(a, index) {
+    const card = el('div', 'card');
+    let thumb;
+    if (a.kind === 'image') {
+      thumb = el('div', 'thumb');
+      const img = el('img');
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.alt = a.filename;
+      img.src = a.url;
+      img.dataset.index = index;
+      thumb.appendChild(img);
+    } else if (a.kind === 'audio') {
+      thumb = el('div', 'thumb audio');
+      thumb.appendChild(el('div', 'icon', '♫'));
+      const audio = el('audio');
+      audio.controls = true;
+      audio.preload = 'none';
+      audio.src = a.url;
+      thumb.appendChild(audio);
+    } else {
+      thumb = el('div', 'thumb other', '.' + (a.ext || '?'));
+    }
+    card.appendChild(thumb);
+
+    const info = el('div', 'info');
+    const name = el('div', 'name', a.filename);
+    name.title = a.path;
+    info.appendChild(name);
+    const folder = el('div', 'folder',
+      a.pack && a.pack !== a.folder ? a.pack + ' / ' + a.folder : a.folder);
+    folder.title = folder.textContent;
+    info.appendChild(folder);
+    const meta = [a.ext.toUpperCase(), formatSize(a.size_kb)];
+    if (a.width) meta.push(a.width + '×' + a.height);
+    info.appendChild(el('div', 'meta', meta.join(' · ')));
+    card.appendChild(info);
+    return card;
+  }
+
+  // Infinite scroll
+  new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting && rendered < filtered.length) renderMore();
+  }, { rootMargin: '800px' }).observe(sentinel);
+
+  // Search (debounced)
+  let timer;
+  searchEl.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(applyFilters, 150);
+  });
+
+  // Kind filter buttons
+  document.querySelectorAll('.filters button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filters button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      kindFilter = btn.dataset.kind;
+      applyFilters();
+    });
+  });
+
+  // Pixel-art scaling toggle
+  document.getElementById('pixelated').addEventListener('change', e => {
+    document.body.classList.toggle('pixelated', e.target.checked);
+  });
+
+  // Only one audio plays at a time
+  document.addEventListener('play', e => {
+    document.querySelectorAll('audio').forEach(a => { if (a !== e.target) a.pause(); });
+  }, true);
+
+  // Lightbox
+  grid.addEventListener('click', e => {
+    const img = e.target.closest('.thumb img');
+    if (!img) return;
+    const a = filtered[img.dataset.index];
+    lbImg.src = a.url;
+    lbCaption.textContent = a.path + (a.width ? '  (' + a.width + '×' + a.height + ')' : '');
+    lightbox.classList.add('open');
+  });
+  function closeLightbox() { lightbox.classList.remove('open'); lbImg.removeAttribute('src'); }
+  lightbox.addEventListener('click', e => { if (e.target !== lbImg) closeLightbox(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+
+  // Data loading
+  if (Array.isArray(window.ASSETS)) {
+    setData(window.ASSETS);
+  } else {
+    document.getElementById('loader').hidden = false;
+    countEl.textContent = '';
+    document.getElementById('jsonFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { setData(JSON.parse(reader.result)); }
+        catch (err) { alert('Could not parse JSON: ' + err.message); }
+      };
+      reader.readAsText(file);
+    });
+  }
+})();
+</script>
+</body>
+</html>
