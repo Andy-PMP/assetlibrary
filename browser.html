@@ -9,12 +9,14 @@
     --bg: #f4f4f6; --panel: #ffffff; --text: #1d1d22; --muted: #6b6b76;
     --border: #dcdce2; --accent: #3b6fe0; --accent-text: #ffffff;
     --check-a: #e6e6ea; --check-b: #f8f8fa;
+    --tag-bg: #e3ebfc; --tag-text: #24448f; --warn: #b5600b;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #16161a; --panel: #212127; --text: #e8e8ec; --muted: #9a9aa6;
       --border: #34343c; --accent: #5b8bf5; --accent-text: #ffffff;
       --check-a: #2a2a31; --check-b: #33333b;
+      --tag-bg: #2c3a5c; --tag-text: #c9d8ff; --warn: #f0a24a;
     }
   }
   * { box-sizing: border-box; }
@@ -34,6 +36,10 @@
   .filters button.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
   label.opt { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; cursor: pointer; }
   #count { color: var(--muted); font-size: 13px; margin-left: auto; white-space: nowrap; }
+  .btn { padding: 7px 12px; border: 1px solid var(--border); border-radius: 6px;
+         background: var(--bg); color: var(--text); cursor: pointer; font-size: 13px; white-space: nowrap; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  #unsynced { color: var(--warn); font-size: 13px; white-space: nowrap; }
 
   main { padding: 16px; }
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
@@ -56,6 +62,17 @@
   .name, .folder, .meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .name { font-weight: 600; }
   .folder, .meta { color: var(--muted); font-size: 12px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .tag { display: inline-flex; align-items: center; max-width: 100%; border: none; border-radius: 10px;
+         padding: 1px 2px 1px 8px; background: var(--tag-bg); color: var(--tag-text);
+         font-size: 11px; cursor: pointer; }
+  .tag span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tag .x { padding: 0 5px; opacity: .55; }
+  .tag .x:hover { opacity: 1; }
+  .add-tag { border: 1px dashed var(--border); border-radius: 10px; padding: 1px 8px;
+             background: none; color: var(--muted); font-size: 11px; cursor: pointer; }
+  .tag-input { width: 100%; padding: 2px 6px; font-size: 12px; border: 1px solid var(--accent);
+               border-radius: 6px; background: var(--bg); color: var(--text); }
 
   #sentinel { height: 1px; }
   #empty, #loader { text-align: center; color: var(--muted); padding: 60px 16px; }
@@ -79,7 +96,7 @@
 <body>
 <header>
   <h1>Asset Browser</h1>
-  <input id="search" type="search" placeholder="Search filename or folder…" autocomplete="off">
+  <input id="search" type="search" placeholder="Search filename, folder or tag…" autocomplete="off">
   <div class="filters">
     <button data-kind="all" class="active">All</button>
     <button data-kind="image">Images</button>
@@ -87,7 +104,12 @@
   </div>
   <label class="opt"><input type="checkbox" id="pixelated"> Pixel art scaling</label>
   <span id="count"></span>
+  <button class="btn" id="tagResults" title="Add tags to every asset currently shown">Tag results…</button>
+  <span id="unsynced" hidden></span>
+  <button class="btn" id="exportTags" disabled
+          title="Download tags.json, then run: python import_tags.py">Export tags</button>
 </header>
+<datalist id="allTags"></datalist>
 
 <main>
   <div id="loader" hidden>
@@ -118,6 +140,13 @@
   const lightbox = document.getElementById('lightbox');
   const lbImg = lightbox.querySelector('img');
   const lbCaption = lightbox.querySelector('.caption');
+  const unsyncedEl = document.getElementById('unsynced');
+  const exportBtn = document.getElementById('exportTags');
+  const tagList = document.getElementById('allTags');
+
+  // Tag edits not yet imported into assets.db: { path: [full sorted tag list] }
+  const TAGS_KEY = 'assetBrowser.tagEdits';
+  let edits = loadEdits();
 
   let assets = [];
   let filtered = [];
@@ -125,11 +154,107 @@
   let kindFilter = 'all';
 
   function setData(data) {
-    assets = data.map(a => Object.assign(a, {
-      _search: (a.filename + ' ' + a.folder + ' ' + (a.pack || '')).toLowerCase()
-    }));
+    assets = data.map(a => {
+      a._dbTags = (a.tags || []).slice().sort();
+      a.tags = a._dbTags;
+      const local = edits[a.path];
+      if (local) {
+        // Already synced to the DB (import_tags.py + re-export) -> drop the local copy
+        if (sameTags(local, a._dbTags)) delete edits[a.path];
+        else a.tags = local;
+      }
+      a._search = searchText(a);
+      return a;
+    });
+    saveEdits();
+    refreshTagList();
     document.getElementById('loader').hidden = true;
     applyFilters();
+  }
+
+  function searchText(a) {
+    return (a.filename + ' ' + a.folder + ' ' + (a.pack || '') + ' ' + a.tags.join(' ')).toLowerCase();
+  }
+
+  // --- Tags ---
+  function loadEdits() {
+    try { return JSON.parse(localStorage.getItem(TAGS_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+
+  function saveEdits() {
+    try { localStorage.setItem(TAGS_KEY, JSON.stringify(edits)); }
+    catch (e) {
+      alert('Could not save tag edits in this browser (' + e.name + '). ' +
+            'Click "Export tags" now so they aren\'t lost.');
+    }
+    const n = Object.keys(edits).length;
+    unsyncedEl.hidden = n === 0;
+    unsyncedEl.textContent = n.toLocaleString() + ' unsynced';
+    unsyncedEl.title = 'Tag edits saved in this browser only. Export them, then run ' +
+                       'import_tags.py to save them to assets.db.';
+    exportBtn.disabled = n === 0;
+  }
+
+  function normalizeTag(t) { return t.toLowerCase().trim().replace(/\s+/g, ' '); }
+  function parseTags(text) { return text.split(',').map(normalizeTag).filter(Boolean); }
+  function sameTags(x, y) { return x.length === y.length && x.every((t, i) => t === y[i]); }
+
+  function setTags(a, tags) {
+    a.tags = [...new Set(tags)].sort();
+    a._search = searchText(a);
+    if (sameTags(a.tags, a._dbTags)) delete edits[a.path];
+    else edits[a.path] = a.tags;
+  }
+
+  function commitTags(a, tags) {
+    setTags(a, tags);
+    saveEdits();
+    refreshTagList();
+  }
+
+  function refreshTagList() {
+    const all = new Set();
+    assets.forEach(a => a.tags.forEach(t => all.add(t)));
+    const frag = document.createDocumentFragment();
+    [...all].sort().forEach(t => { const o = el('option'); o.value = t; frag.appendChild(o); });
+    tagList.replaceChildren(frag);
+  }
+
+  function renderTags(box, a) {
+    box.replaceChildren();
+    a.tags.forEach(t => {
+      const chip = el('button', 'tag');
+      chip.title = 'Search for "' + t + '"';
+      chip.dataset.tag = t;
+      chip.appendChild(el('span', null, t));
+      const x = el('span', 'x', '×');
+      x.title = 'Remove tag';
+      chip.appendChild(x);
+      box.appendChild(chip);
+    });
+    box.appendChild(el('button', 'add-tag', '+ tag'));
+  }
+
+  function openTagInput(box, a, addBtn) {
+    const input = el('input', 'tag-input');
+    input.setAttribute('list', 'allTags');
+    input.placeholder = 'tag, another tag';
+    addBtn.replaceWith(input);
+    input.focus();
+    let done = false;
+    const finish = commit => {
+      if (done) return;
+      done = true;
+      const added = commit ? parseTags(input.value) : [];
+      if (added.length) commitTags(a, a.tags.concat(added));
+      renderTags(box, a);
+    };
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') finish(true);
+      else if (e.key === 'Escape') { e.stopPropagation(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   function applyFilters() {
@@ -199,6 +324,10 @@
     const meta = [a.ext.toUpperCase(), formatSize(a.size_kb)];
     if (a.width) meta.push(a.width + '×' + a.height);
     info.appendChild(el('div', 'meta', meta.join(' · ')));
+    const tagBox = el('div', 'tags');
+    tagBox.dataset.index = index;
+    renderTags(tagBox, a);
+    info.appendChild(tagBox);
     card.appendChild(info);
     return card;
   }
@@ -228,6 +357,48 @@
   // Pixel-art scaling toggle
   document.getElementById('pixelated').addEventListener('change', e => {
     document.body.classList.toggle('pixelated', e.target.checked);
+  });
+
+  // Tag chips: click to search, × to remove, "+ tag" to add
+  grid.addEventListener('click', e => {
+    const box = e.target.closest('.tags');
+    if (!box) return;
+    const a = filtered[box.dataset.index];
+    const chip = e.target.closest('.tag');
+    if (e.target.closest('.x')) {
+      commitTags(a, a.tags.filter(t => t !== chip.dataset.tag));
+      renderTags(box, a);
+    } else if (chip) {
+      searchEl.value = chip.dataset.tag;
+      applyFilters();
+    } else if (e.target.closest('.add-tag')) {
+      openTagInput(box, a, e.target.closest('.add-tag'));
+    }
+  });
+
+  // Bulk-tag everything matching the current search/filter
+  document.getElementById('tagResults').addEventListener('click', () => {
+    if (!filtered.length) return;
+    const text = prompt('Add tags to all ' + filtered.length.toLocaleString() +
+                        ' assets shown (comma-separated):');
+    const added = text ? parseTags(text) : [];
+    if (!added.length) return;
+    filtered.forEach(a => setTags(a, a.tags.concat(added)));
+    saveEdits();
+    refreshTagList();
+    grid.querySelectorAll('.tags').forEach(box => renderTags(box, filtered[box.dataset.index]));
+  });
+
+  // Download pending edits for import_tags.py
+  exportBtn.addEventListener('click', () => {
+    const json = JSON.stringify({ version: 1, exported: new Date().toISOString(), tags: edits }, null, 1);
+    const link = el('a');
+    link.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    link.download = 'tags.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
   });
 
   // Only one audio plays at a time
