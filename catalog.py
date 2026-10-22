@@ -63,11 +63,14 @@ def walk(root):
     def on_error(err):
         print(f"\nWarning: cannot read {err.filename}: {err.strerror}", file=sys.stderr)
 
-    for dirpath, _dirnames, filenames in os.walk(root, onerror=on_error):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=on_error):
+        dirnames[:] = [d for d in dirnames if d != "__MACOSX"]  # macOS zip metadata
         rel = os.path.relpath(dirpath, root)
         pack = os.path.basename(root) if rel == "." else rel.split(os.sep)[0]
         folder = os.path.basename(dirpath)
         for name in filenames:
+            if name.startswith("._"):  # AppleDouble resource forks, not real files
+                continue
             path = os.path.join(dirpath, name)
             try:
                 size_kb = round(os.path.getsize(path) / 1024, 2)

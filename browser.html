@@ -54,6 +54,10 @@
            background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
   .thumb img { width: 100%; height: 100%; object-fit: contain; cursor: zoom-in; padding: 6px; }
   body.pixelated .thumb img, body.pixelated #lightbox img { image-rendering: pixelated; }
+  body.bg-dark .thumb:not(.audio):not(.other), body.bg-dark #lightbox img { background: #1a1a1f; }
+  body.bg-light .thumb:not(.audio):not(.other), body.bg-light #lightbox img { background: #ffffff; }
+  #thumbBg { padding: 6px 8px; font-size: 13px; border: 1px solid var(--border); border-radius: 6px;
+             background: var(--bg); color: var(--text); }
   .thumb.audio { background: var(--bg); flex-direction: column; gap: 10px; padding: 8px; }
   .thumb.audio .icon { font-size: 36px; opacity: .6; }
   .thumb.audio audio { width: 100%; }
@@ -103,6 +107,13 @@
     <button data-kind="audio">Audio</button>
   </div>
   <label class="opt"><input type="checkbox" id="pixelated"> Pixel art scaling</label>
+  <label class="opt">Background
+    <select id="thumbBg" title="Thumbnail background (B to cycle)">
+      <option value="checker">Checker</option>
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+    </select>
+  </label>
   <span id="count"></span>
   <button class="btn" id="tagResults" title="Add tags to every asset currently shown">Tag results…</button>
   <span id="unsynced" hidden></span>
@@ -358,6 +369,24 @@
   document.getElementById('pixelated').addEventListener('change', e => {
     document.body.classList.toggle('pixelated', e.target.checked);
   });
+
+  // Thumbnail background: dark makes white/light sprites (effects, glows) visible
+  const BG_KEY = 'assetBrowser.thumbBg';
+  const bgSelect = document.getElementById('thumbBg');
+  function setBg(value) {
+    bgSelect.value = value;
+    document.body.classList.remove('bg-dark', 'bg-light');
+    if (value !== 'checker') document.body.classList.add('bg-' + value);
+    try { localStorage.setItem(BG_KEY, value); } catch (e) {}
+  }
+  bgSelect.addEventListener('change', () => setBg(bgSelect.value));
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'b' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.matches('input, textarea, select')) return;
+    const opts = [...bgSelect.options].map(o => o.value);
+    setBg(opts[(opts.indexOf(bgSelect.value) + 1) % opts.length]);
+  });
+  try { setBg(localStorage.getItem(BG_KEY) || 'checker'); } catch (e) { setBg('checker'); }
 
   // Tag chips: click to search, × to remove, "+ tag" to add
   grid.addEventListener('click', e => {
